@@ -1,81 +1,94 @@
-const { src, dest, series, watch } = require('gulp');
-const sass = require('gulp-sass');
-const csso = require('gulp-csso');
-const include = require('gulp-file-include');
-const htmlmin = require('gulp-htmlmin');
-const del = require('del');
-const concat = require('gulp-concat');
-const media = require('gulp-group-css-media-queries');
+const { src, dest, watch, series, parallel } = require('gulp');
+const sass = require('gulp-dart-sass');
 const autoprefixer = require('gulp-autoprefixer');
-const terser = require('gulp-terser');
-const imageMin = require('gulp-imagemin');
-const sync = require('browser-sync').create();
+const csso = require('gulp-csso');
 const babel = require('gulp-babel');
+const rename = require('gulp-rename');
+const terser = require('gulp-terser');
+const webpack = require('webpack-stream');
+const sourcemaps = require('gulp-sourcemaps');
+const del = require('del');
+const mode = require('gulp-mode')();
+const browserSync = require('browser-sync').create();
 
-function html() {
-	return src('src/**.html')
-		.pipe(
-			include({
-				prefix: '@@',
-			})
-		)
-		.pipe(
-			htmlmin({
-				collapseWhitespace: true,
-			})
-		)
-		.pipe(dest('dist'));
+// clean tasks
+const clean = () => {
+  return del(['dist']);
 }
 
-function scss() {
-	return src('src/scss/**.scss')
-		.pipe(sass())
-		.pipe(media())
-		.pipe(autoprefixer({}))
-		.pipe(csso())
-		.pipe(concat('style.css'))
-		.pipe(dest('dist/css'));
+const cleanImages = () => {
+  return del(['dist/assets/images']);
 }
 
-function js() {
-	return (
-		src('src/js/**.js')
-			.pipe(include())
-			// .pipe(terser())
-			.pipe(
-				babel({
-					presets: ['@babel/env'],
-				})
-			)
-			.pipe(dest('dist/js'))
-	)
+const cleanFonts = () => {
+  return del(['dist/assets/fonts']);
 }
 
-function image() {
-	return src('src/img/*')
-		.pipe(imageMin({
-			progressive: true,
-			svgoPlugins: [{ removeViewBox: false }],
-			interlaced: true,
-			optimizationLevel: 3
-		}))
-		.pipe(dest('dist/img'));
+const html = () => {
+	return src('index.html')
+		.pipe(dest('dist'))
+		.pipe(mode.development(browserSync.stream()))
 }
 
-function clear() {
-	return del('dist');
+// css task
+const css = () => {
+  return src('src/scss/index.scss')
+    // .pipe(mode.development( sourcemaps.init() ))
+    .pipe(sass().on('error', sass.logError))
+    .pipe(autoprefixer())
+    .pipe(rename('app.css'))
+    .pipe(mode.production( csso() ))
+    // .pipe(mode.development( sourcemaps.write() ))
+    .pipe(dest('dist'))
+    .pipe(mode.development( browserSync.stream() ));
 }
 
-function serve() {
-	sync.init({
+// js task
+const js = () => {
+  return src('src/**/*.js')
+    .pipe(babel({
+      presets: ['@babel/env']
+    }))
+    .pipe(webpack({
+      mode: 'development',
+      devtool: 'inline-source-map'
+    }))
+    // .pipe(mode.development( sourcemaps.init({ loadMaps: true }) ))
+    .pipe(rename('app.js'))
+    .pipe(mode.production( terser({ output: { comments: false }}) ))
+    // .pipe(mode.development( sourcemaps.write() ))
+    .pipe(dest('dist'))
+    .pipe(mode.development( browserSync.stream() ));
+}
+
+// copy tasks
+const copyImages = () => {
+  return src('src/assets/images/**/*.{jpg,jpeg,png,gif,svg,ico}')
+    .pipe(dest('dist/assets/images'));
+}
+
+const copyFonts = () => {
+  return src('src/assets/fonts/**/*.{svg,eot,ttf,woff,woff2}')
+    .pipe(dest('dist/assets/fonts'));
+}
+
+// watch task
+const watchForChanges = () => {
+  browserSync.init({
 		server: './dist',
-	});
+  })
 
-	watch('src/**.html', series(html)).on('change', sync.reload);
-	watch('src/scss/**.scss', series(scss)).on('change', sync.reload);
-	watch('src/js/**.js', series(js)).on('change', sync.reload);
-	watch('src/img/*', series(image)).on('change', sync.reload);
+  watch('src/scss/**/*.scss', css).on('change', browserSync.reload);
+  watch('src/**/*.js', js).on('change', browserSync.reload);
+  watch('**/*.html', html).on('change', browserSync.reload);
+  watch('src/assets/images/**/*.{png,jpg,jpeg,gif,svg}', series(cleanImages, copyImages));
+  watch('src/assets/fonts/**/*.{svg,eot,ttf,woff,woff2}', series(cleanFonts, copyFonts));
 }
 
-exports.serve = series(clear, image, scss, html, js, serve);
-exports.clear = clear;
+// public tasks
+exports.default = series(
+	clean,
+	parallel( html, css, js, copyImages, copyFonts),
+	watchForChanges
+)
+exports.build = series(clean, parallel(html, css, js, copyImages, copyFonts))
